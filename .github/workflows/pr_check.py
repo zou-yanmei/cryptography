@@ -6,7 +6,7 @@ PR 自动审核脚本 - 融合版本
 - 文件内容截断（防止 token 超限）
 - 禁止删除文件检查
 - 禁止修改以前作业检查
-- 完整规范嵌入 Kimi prompt
+- 完整规范嵌入 GLM prompt
 - 详细的截止时间处理
 """
 
@@ -21,7 +21,7 @@ import requests
 # ── 环境变量 ──────────────────────────────────────────────
 PR_TITLE = os.environ["PR_TITLE"]
 PR_NUMBER = os.environ["PR_NUMBER"]
-KIMI_KEY = os.environ.get("KIMI_API_KEY", "")
+GLM_KEY = os.environ.get("GLM_API_KEY", "")
 GH_TOKEN = os.environ["GH_TOKEN"]
 REPO = os.environ["REPO"]
 HEAD_SHA = os.environ["HEAD_SHA"]
@@ -36,7 +36,7 @@ GH = {
 # 文件内容最大长度（防止 token 超限）
 MAX_CONTENT_LENGTH = 20000
 
-# 完整规范文档，嵌入 Kimi prompt
+# 完整规范文档，嵌入 GLM prompt
 SPEC = """# PR 合并要求规范
 
 ## 2. 学生文件夹规范
@@ -202,7 +202,7 @@ def ready_pr():
     node_id = pr_data.get("node_id")
     if not pr_data.get("draft"):
         return  # 不是 draft，不需要处理
-    
+
     requests.post(
         "https://api.github.com/graphql",
         headers=GH,
@@ -223,6 +223,7 @@ def merge_pr():
     })
     print(f"  [debug] merge status={r.status_code}, body={r.text}")
     return r.status_code == 200
+
 
 def close_pr():
     gh_patch(f"/repos/{REPO}/pulls/{PR_NUMBER}", {"state": "closed"})
@@ -311,8 +312,6 @@ def check_file_scope(student_id_name: str, lab: str, changed_files: list):
 
 # ── 步骤 4：截止时间检查 ──────────────────────────────────
 
-# ── 步骤 4：截止时间检查（终极版）──────────────────────────
-
 DATE_RE = re.compile(
     r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?"
 )
@@ -399,12 +398,12 @@ def check_deadline(lab: str):
     sys.exit(0)
 
 
-# ── 步骤 5：Kimi 全面审核 ─────────────────────────────────
+# ── 步骤 5：GLM 全面审核 ─────────────────────────────────
 
 
-def check_with_kimi(student_id_name: str, lab: str, changed_files: list):
-    if not KIMI_KEY:
-        print("  [跳过] 未配置 KIMI_API_KEY，跳过 Kimi 审核")
+def check_with_glm(student_id_name: str, lab: str, changed_files: list):
+    if not GLM_KEY:
+        print("  [跳过] 未配置 GLM_API_KEY，跳过 GLM 审核")
         return
 
     # 学生提交的文件内容
@@ -463,25 +462,25 @@ def check_with_kimi(student_id_name: str, lab: str, changed_files: list):
 
     try:
         resp = requests.post(
-            "https://api.moonshot.cn/v1/chat/completions",
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
             headers={
-                "Authorization": f"Bearer {KIMI_KEY}",
+                "Authorization": f"Bearer {GLM_KEY}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": "kimi-k2.5",
+                "model": "glm-4",
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_msg},
                 ],
-                "temperature": 1,
+                "temperature": 0.1,
             },
             timeout=120,
         )
         text = resp.json()["choices"][0]["message"]["content"].strip()
         text = re.sub(r"```json|```", "", text).strip()
         result = json.loads(text)
-        print(f"  [Kimi] pass={result.get('pass')}, reason={result.get('reason')}")
+        print(f"  [GLM] pass={result.get('pass')}, reason={result.get('reason')}")
 
         if not result.get("pass", True):
             reject(
@@ -489,7 +488,7 @@ def check_with_kimi(student_id_name: str, lab: str, changed_files: list):
                 f"{result.get('reason', '内容存在问题，请检查后重新提交。')}"
             )
     except Exception as e:
-        print(f"  [warn] Kimi 审核异常，跳过：{e}")
+        print(f"  [warn] GLM 审核异常，跳过：{e}")
 
 
 # ── 主流程 ────────────────────────────────────────────────
@@ -500,9 +499,7 @@ def main():
     # 实时获取最新 PR 标题，防止读到缓存的旧标题
     pr_data = gh_get(f"/repos/{REPO}/pulls/{PR_NUMBER}")
     PR_TITLE = pr_data.get("title", PR_TITLE)
-    
 
-    
     print(f"[PR #{PR_NUMBER}] 开始审核：{PR_TITLE}")
 
     # 1. 标题格式检查
@@ -531,9 +528,9 @@ def main():
     check_deadline(lab)
     print(f"  ✓ 截止时间检查通过")
 
-    # 7. Kimi 全面审核
-    check_with_kimi(student_id_name, lab, changed_files)
-    print(f"  ✓ Kimi 审核通过")
+    # 7. GLM 全面审核
+    check_with_glm(student_id_name, lab, changed_files)
+    print(f"  ✓ GLM 审核通过")
 
     # 全部通过，评论并合并
     comment(
@@ -551,7 +548,7 @@ def main():
         "| 文件格式 | ✅ |\n"
         "| 内容质量 | ✅ |\n"
     )
-    ready_pr() 
+    ready_pr()
     if merge_pr():
         print(f"  ✓ PR #{PR_NUMBER} 已自动合并")
     else:
